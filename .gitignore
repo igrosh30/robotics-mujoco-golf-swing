@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.python-version
+MUJOCO_LOG.TXT
+.DS_Store
