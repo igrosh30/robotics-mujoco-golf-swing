@@ -1,0 +1,5 @@
+﻿# Simulation and visual export dependencies.
+mujoco==3.13.0
+numpy>=2.0,<3
+scipy>=1.17,<2
+Pillow>=10,<13
