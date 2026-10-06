@@ -1,0 +1,390 @@
+UNDERSTANDING AND IMPROVING YOUR GOLF-SWING PROJECT
+=================================================
+
+This is a learning and code guide, not a lab report. Figure 1 and the task
+instructions in the lab PDF were read for this revision; the PDF was not edited.
+The poses are inspired by its sequence, not extracted motion-capture data.
+
+1. THE BIG PICTURE
+-----------------
+This project simulates a golfer, a club and a freely moving ball in MuJoCo.
+Python chooses desired joint angles over time. A controller converts tracking
+errors into motor torques. MuJoCo uses mass, inertia, gravity, constraints and
+contact to calculate accelerations and integrate the movement.
+
+  reference motion -> controller -> motor torques -> dynamics -> movement
+                           ^                                      |
+                           +----------- measured feedback --------+
+
+The ball moves through simulated contact, not a prescribed animation or kick.
+A GIF visualizes the result. Changing playback speed does not change physics.
+
+2. WHAT EVERY FILE DOES
+----------------------
+starting.xml: physical scene, bodies, geometry, joints, motors, gravity,
+contact, grip constraint and cameras.
+starting.py: implicit PD controller, simulator, impact metrics and viewer.
+swing_trajectory.py: hand/club path, elbow-aware inverse kinematics and timing.
+golf_club_head.stl: collision hull of the distal head, derived from the supplied STL.
+tools/build_club_collision.py: rebuilds that collider from the mesh and XML transform.
+tests/validate_swing.py: reference, impact, timestep and disturbance checks.
+export_motion.py: generates just four visuals in exports, replacing them each run.
+golf_club.stl: required club mesh, loaded by the XML.
+requirements.txt: MuJoCo, NumPy, SciPy and Pillow dependencies.
+RUN_LAB.txt: the two main commands and setup instructions.
+UNDERSTAND_THE_PROJECT.txt: this learning guide.
+exports/front.gif and side.gif: front and side animations.
+exports/front.png and side.png: sheets containing the main swing poses.
+original/: earlier source backups, unused original ball mesh and reference image.
+.venv/: Python environment required to run the project.
+__pycache__/: Python's automatically recreated cache, if present.
+
+The PDF remains untouched. The exports folder contains only the four visuals.
+
+3. COORDINATES, JOINTS AND THE BODY TREE
+-------------------------------------
+Use metres, kilograms, seconds, radians, newtons and newton-metres. World Z is
+up; gravity is (0,0,-9.81) m/s^2. The player's front is approximately +X at
+address, and +Y is initially their left. The initial ball centre is
+(0.85,0.042,0.022) m. The struck ball in this configuration moves mainly +Y.
+
+XML hinge ranges default to degrees; runtime hinge qpos/qvel/qacc use radians,
+rad/s and rad/s^2. Convert angle_deg = angle_rad * 180/pi.
+
+Each body's position and orientation are relative to its parent:
+
+  world
+    ball [free joint]
+    torso [anchored to the world; a frame for the entire golfer]
+      lower_waist -> pelvis -> fixed thighs -> fixed shins -> fixed feet
+      swing_axis [torso_turn]
+        upper_torso [fixed lean]
+          head
+          right_upper_arm [arm lift + two shoulder hinges]
+            right_lower_arm [elbow hinge]
+              right_hand [two wrist hinges, club attached]
+          left_upper_arm [arm lift + two shoulder hinges]
+            left_lower_arm [elbow hinge, left grip marker]
+
+The lower body is now anchored to the world, as requested for studying arm
+motion without falling. There is no free root or standing-balance simulation.
+The arms, turning torso, club and ball still use simulated dynamics. The fixed
+support can supply reaction forces and torques, unlike a freely standing player.
+
+Eleven actuated hinge coordinates (also the JOINTS array order):
+  Joint                    Local XML axis       Range, degrees    Torque, N m
+  torso_turn               0, 0, 1              -90 to 90         +/-250
+  right_arm_lift           0, 1, 0             -170 to 90         +/-180
+  right_shoulder1          1, 0, 0             -170 to 170        +/-180
+  right_shoulder2          0, 0, 1             -170 to 170        +/-180
+  right_elbow              .016,-.0198,.0126    -32.6 to 110       +/-90
+  right_wrist_cock         0, 0, 1             -150 to 150        +/-90
+  right_wrist_deviation    0, 1, 0             -120 to 100        +/-90
+  left_arm_lift            0, 1, 0             -170 to 90         +/-180
+  left_shoulder1           1, 0, 0             -170 to 170        +/-180
+  left_shoulder2           0, 0, 1             -170 to 170        +/-180
+  left_elbow              -.016,-.0198,-.0126   -32.6 to 110       +/-90
+
+Each elbow adds one bending DOF. Its zero pose already has 32.61 degrees of
+geometric bend, so physical flexion is q_elbow (degrees) + 32.61. Negative q
+straightens the elbow. The range stops just short of geometric hyperextension.
+The shoulder axes were changed from the old oblique axes to local Y/X/Z hinges.
+The wrist coordinates are effective mechanical rotations with broad limits;
+they are not calibrated anatomical ranges. The left wrist remains simplified.
+
+MuJoCo normalizes joint axes. All axes are local and move with preceding joints.
+Rotation order matters. The three shoulder angles cannot be changed independently
+without recalculating grip closure and the elbow/club path.
+
+Before the grip constraint: nq=18, nv=17, nu=11. The velocity coordinates are
+11 hinges plus the ball's 6 free-body velocities. Its quaternion contributes
+4 position coordinates but only 3 independent rotation dimensions. The shared
+grip adds three positional constraints; rank can depend on configuration.
+
+Quaternions use (w,x,y,z), are normalized by MuJoCo, and are not four angles.
+Do not differentiate their components as if they were angular velocities.
+qpos and qvel have different indexing; qposadr and dofadr locate each joint.
+
+4. KINEMATICS: DESCRIBING MOTION
+------------------------------
+Kinematics describes where things are and how they move, without asking why.
+For a hinge, q is angle, v=dq/dt is angular velocity, a=dv/dt is acceleration.
+
+Forward kinematics maps generalized configuration to a marker position:
+  p_head = f(q)
+  T_world,head = T_world,torso * ... * T_hand,head
+  T = [ R  p ]     R: rotation matrix, p: translation
+      [ 0  1 ]
+
+Parent rotations change all child offset directions. A torso rotation can
+therefore move the club even when wrist velocity is zero.
+
+'club_head' is a site: a named, massless measurement point fixed in the hand
+body. It approximates a club-head marker, not necessarily the exact contact
+point. The red marker is not a collision sphere or force sensor.
+
+The linear-velocity Jacobian satisfies:
+  v_head = J_head(q) * v
+To calculate this, use mj_jacSite with all 17 generalized velocities. There is
+no floating player base now. Speed is the norm sqrt(vx^2+vy^2+vz^2).
+
+Head acceleration is:
+  a_head = J_head*a + (dJ_head/dt)*v
+J*a alone misses the changing-Jacobian term. You can differentiate the
+Jacobian-derived velocity with NumPy gradient to estimate full acceleration.
+Numerical derivatives amplify abrupt changes/noise, especially near contact
+and at endpoints. Joint and ball accelerations can be read from the forward dynamics solver.
+
+Inverse kinematics asks which joint angles produce a requested position. This
+project uses a bounded numerical IK solve for its two arms and club direction.
+It does not optimize the shot to reach a hole or reproduce measured human motion.
+
+5. REFERENCE MOTION AND TWO-HAND CLOSURE
+--------------------------------------
+Schedule: 0-0.50 s address; 0.50-1.50 s backswing; 1.50-2.25 s downswing;
+2.25-3.10 s follow-through; then hold. First actual contact is around 2.2535 s.
+IMPACT_TIME is a path knot, not an instruction to impart velocity to the ball.
+
+Edit swing_trajectory.py to adjust poses. The pose columns are torso angle in
+degrees, grip X/Y/Z in metres relative to upper_torso, and club phase in degrees.
+Rows correspond to progress u=-1,-0.5,0,0.5,1:
+  Top:       [-45, .17,-.23, .46,-250]
+  Takeaway:  [-20, .27,-.10, .22, -75]
+  Address:   [  0, .35,  0, .08,   0]
+  Release:   [ 40, .27, .13, .23, 100]
+  Finish:    [ 65, .13,.235, .48, 250]
+
+A quintic Hermite curve sets progress versus time, with continuous position,
+velocity and acceleration. Progress goes 0 -> -1 -> 0 -> +1. At impact its
+speed is 2.5 units/s, so the club continues through the ball. The same geometric
+backswing path is retraced faster in the downswing; this is a simplification.
+
+Both hands share a target point. Given arm segment lengths a,b and shoulder-hand
+distance d, the elbow lies on a circle with centre a distance
+  along=(a*a-b*b+d*d)/(2*d)
+from the shoulder and radius sqrt(a*a-along*along). A preferred direction places
+the elbow below/outside the shoulder-hand line. The right elbow bends at the top
+(about 123 degrees), while the left is nearly straight (about 19 degrees).
+At the finish, left/right are about 126/21 degrees. Near impact, the preferred
+right elbow direction adjusts the forearm/club-face orientation to allow launch.
+
+SciPy least_squares fits shoulder, elbow and wrist angles to the two hand points,
+the elbow points and club direction, respecting joint limits. Unreachable targets
+raise an error. A dense joint spline is built once, before simulation. It is
+sampled using qdot=q_u*udot and qddot=q_uu*udot^2+q_u*uddot. No IK calls or pose
+teleports drive the live simulation; the runtime controller applies torques.
+
+The XML connect constraint keeps both grips together dynamically. It constrains
+position, not hand orientation. The validation script checks reference closure,
+joint limits, elbow asymmetry and nonzero club speed at impact.
+
+6. DYNAMICS: CAUSING MOTION
+--------------------------
+A particle obeys F=m*a; rotation also depends on inertia. For this whole model:
+
+  M(q)*a + c(q,v) = tau_motor + tau_passive + tau_external + Jc(q)^T*lambda
+
+M is the generalized mass matrix; off-diagonal terms couple joint motions.
+c contains gravity and Coriolis/centrifugal effects. Passive force includes
+springs and damping. External force is the applied disturbance here.
+Jc^T*lambda includes contact, grip and active joint-limit constraint effects.
+
+MuJoCo names the corresponding arrays qM, qfrc_bias, qfrc_actuator,
+qfrc_passive, qfrc_applied and qfrc_constraint. mj_fullM expands the sparse M.
+An unactuated coordinate can accelerate through coupling and contact.
+
+The player's mass is explicitly assigned with mass="..." on each player geom
+in starting.xml, in kilograms. The requested group totals are:
+  Each leg (thigh + shin, excluding foot): 11 kg
+  Each foot: 1 kg (two capsule geoms of 0.5 kg)
+  Torso, including waist and pelvis: 30 kg
+  Each arm: 3 kg (the right arm includes the separate hand geom)
+  Head: 5 kg
+These values total 65 kg, excluding club and ball. Masses within each group
+retain their previous geometric proportions. The left hand has no separate
+geom in this simplified model. These are specified model masses, not measured
+anatomical segment values. Changing geom size now changes inertia but leaves
+its explicit mass unchanged. CG follows this mass distribution and the pose;
+it is not fixed at a belly-button marker.
+The club explicitly retains density 1000 kg/m^3 and its previous inferred mass
+of about 1.288 kg; the ball remains 0.046 kg. Total scene body mass is therefore
+about 66.334 kg. At gravity 9.81 m/s^2, the player's weight alone is 637.65 N.
+The right_hand body includes both hand and club geoms; its mass is not the
+club mass alone. The invisible spine still has mass:
+zero visual alpha does not remove physical geometry. Massless frame bodies
+can have massive descendants.
+
+Rotational inertia has units kg m^2. Its three principal moments belong to
+the inertial principal-axis frame, not automatically world XYZ. MuJoCo's body_ipos and body_iquat
+provide COM offsets and inertial quaternions. About a displaced joint:
+  I_joint = I_COM + m*((r dot r)*identity - r*r^T)
+This parallel-axis term helps explain why a distant mass is harder to swing.
+
+Default hinges have zero stiffness, damping 2 N m s/rad and armature
+0.01 kg m^2. Torso damping is 5. 'big_joint' and 'big_stiff_joint' defaults are
+defined but unused by the current joints. Armature adds coordinate inertia,
+not a visible body mass. A hinge spring/damper behaves approximately as:
+  tau_passive = -k*(q-q_spring_reference) - b*v
+
+Contact uses numerical compliant/regularized constraints. solref and solimp
+shape their response; they are not directly a restitution coefficient or a
+measured material law. Tiny penetration can occur. Mesh collision normally
+uses a convex representation, so a concave STL silhouette need not match its
+collision surface. To avoid the full-club convex wedge, the visual mesh has
+collisions disabled. A separate distal head hull and a thin shaft capsule do
+contact. Those two geoms have zero mass, so the original club mass is retained.
+The explicit head/ball pair uses solref=(.003,.35) and solimp=(.95,.99,.001).
+This short underdamped response is not a measured restitution or material law.
+
+The body class sets condim=1, but floor and ball use condim=3. MuJoCo combines
+pair parameters; with equal priority it uses the larger condim. Do not conclude
+all contacts are frictionless by looking at one geom alone. Four explicit
+body-pair exclusions prevent overlap at the forearms/grip and the adjoining
+waist shapes from blocking the intended motion. Other eligible contacts remain
+subject to MuJoCo's normal filtering rules.
+
+7. CONTROL AND THE CODE'S EXECUTION ORDER
+---------------------------------------
+The controller uses implicit PD feedback to avoid high-gain damping oscillations
+in the new low-inertia elbow directions. Let h be the timestep and M_a the 11x11
+actuated block of the full mass matrix:
+  a_cmd = solve(M_a + diag(h*Kd+h*h*Kp),
+                Kp*(q_d-q) + (Kd+h*Kp)*(v_d-v) + M_a*a_d)
+  tau_requested = M_a*a_cmd + bias_selected - passive_selected
+  tau_command = clip(tau_requested, actuator_limits)
+
+Kp corrects pose error; Kd damps velocity error. Bias compensation accounts for
+gravity and velocity-dependent forces. The implicit damping treatment improves
+numerical stability but does not invert the full grip/contact-constrained dynamics.
+Some tracking error and brief torque saturation are still expected.
+
+Kp=[650,300,220,220,180,100,100,300,220,220,180] N m/rad.
+Kd=[70,40,28,28,20,12,12,40,28,28,20] N m s/rad.
+
+Current motors have unit gear, so controls correspond to hinge torques in N m.
+Changing transmission/gear requires revisiting that assumption. Use qfrc_actuator
+when reading actual actuator torque rather than relying only on control values.
+
+Saturation occurs when requested torque exceeds a bound. More Kp cannot fix
+a persistently clipped motor and can worsen oscillation/contact loads.
+
+SwingSimulation.step:
+  1. mj_step1 refreshes kinematics and velocity-dependent quantities.
+  2. Sample the reference and calculate/clamp motor torque.
+  3. Apply any disturbance and check first club-ball contact at current time.
+  4. mj_step2 solves dynamics and integrates one step.
+  5. mj_forward refreshes the new state's derived quantities.
+  6. Record the original trace and metrics.
+
+Euler integration uses 0.0005 s (2000 physics steps/second). This split interface
+assumes an Euler-compatible integrator; changing XML to RK4 does not make the
+same split control loop a proper RK4 implementation.
+
+The XML places the anchored base at z=1.255 m with the soles at ground level.
+Reset sets initial reference angles and clears history.
+
+The optional disturbance is an actual generalized torque, not angle jitter:
+  tau_disturb=A*sin(pi*u)^2*sin(2*pi*f*(t-SETTLE_TIME))
+  u=(t-SETTLE_TIME)/(FINISH_TIME-SETTLE_TIME)
+It acts from 0.50 to 3.10 s, default envelope amplitude A=3 N m and f=8 Hz.
+Only the chosen hinge receives it. The largest sampled torque need not equal A.
+
+8. IMPACT, MOMENTUM, POWER AND ENERGY
+-----------------------------------
+For a ball touching only club and floor:
+  m*a = F_club + F_floor + m*g
+During simultaneous ground contact, velocity change cannot be attributed only
+to the club. Impulse is integral(F dt), measured in N s:
+  m*(v_after-v_before) = integral(F_net dt)
+
+When calculating impact forces, convert contact-frame forces into world XYZ
+forces ON the ball, reversing the sign if the ball is the first geom. Summed
+normal magnitudes across contacts are not the same as a vector resultant.
+A scalar normal impulse is not directly the ball's vector momentum change.
+
+Mechanical motor power and work:
+  P_i=tau_i*v_i [W]; P_total=sum(P_i); W_motor=integral(P_total dt) [J]
+Positive power adds mechanical energy; negative power absorbs it. Mechanical
+work is not electrical input or metabolic effort. Integrating
+max(P_total,0) differs from summing separate positive work at each motor.
+
+Whole-system kinetic energy is T=0.5*v^T*M*v, including translational, rotational,
+coupled and armature effects. Potential includes gravity and joint springs:
+  U_g=m*g*z; U_s=0.5*k*(q-q0)^2 for a simple hinge spring.
+Do not expect T+U constant: motors, disturbances, damping, friction, compliant
+constraints and integration affect the balance. Energy plots are diagnostics,
+not proof of energy conservation or physiological efficiency.
+
+'ball_velocity_at_peak_m_s' is a vector at a recorded peak speed after contact,
+not a rigorously defined launch event. 'ball_displacement_m' is horizontal
+straight-line displacement at the simulation end, not arc length, flight carry
+or eventual stopping distance. Realistic turf resistance and aerodynamics have
+not been calibrated; travel distance is not a validated golf-shot prediction.
+ball_velocity_after_impact_m_s records velocity at first separation from the
+club head, unlike the velocity at peak speed. The ball now launches upward.
+club_head_speed_at_impact_m_s comes from the site Jacobian just before contact.
+max_ball_height_m is the maximum ball-centre height.
+
+9. EXPORT ONLY THE VISUALS YOU NEED
+----------------------------------
+Run from the project folder:
+  .\.venv\Scripts\python.exe export_motion.py
+
+The exports folder contains exactly four files:
+  front.gif and side.gif: animations at 30 fps, played 2x slower by default.
+  front.png and side.png: picture sheets showing the main movement stages.
+
+Each PNG normally contains ten pictures in two rows, like the reference image:
+address, takeaway, backswing, top, early/late downswing, contact, release,
+follow-through and finish. Short runs omit unreached stages. If no contact occurs,
+the strike frame is explicitly labelled as a planned strike with no contact.
+
+Re-running replaces the same four files. There are no automatic graph, CSV,
+JSON, state-archive or copied-input outputs. --slow-motion changes GIF playback
+only. --duration sets simulated seconds. --output selects another destination.
+The simulation runs first; a separate data object replays its poses for rendering.
+Fixed/player cameras may lose the travelling ball after it leaves the view.
+
+10. WHAT CSV IS FOR, AND HOW TO IMPROVE THE MODEL
+----------------------------------------------
+CSV is a plain-text spreadsheet of numbers, with a row for each timestep and
+columns for quantities such as joint angle, torque and ball position. You can
+open it in Excel or Python to calculate results or make graphs. It is not needed
+for your GIFs or pictures and is no longer exported automatically.
+
+If you later want the simulator's basic numerical trace, use:
+  .\.venv\Scripts\python.exe starting.py --headless --csv motion.csv
+This is the original simulator's basic trace, not the removed detailed exporter.
+
+For independent improvements:
+  - Change one timing or pose value at a time in swing_trajectory.py, then rerun.
+  - Inspect whether the swing remains smooth and the hands stay together.
+  - Use the console metrics from starting.py --headless to check tracking,
+    grip separation, motor saturation and simulator warnings.
+  - Check reference angles throughout the swing, not only at the pose knots.
+  - Tune Kp/Kd moderately; more gain can worsen oscillation and saturation.
+  - Changing arm geometry requires rechecking the IK reference and grip closure.
+  - Numerical accuracy needs timestep comparisons, not just a convincing GIF.
+  - Record settings yourself when comparing experiments; visuals are overwritten.
+
+The validation script passes at 0.5 and 0.25 ms steps. Their ball separation
+velocity vectors differ by about 3.3%. Default head speed is about 9.48 m/s;
+ball separation speed about 11.86 m/s, with positive vertical velocity. The ball
+centre reaches about 0.169 m. Grip gap stays below 0.013 mm and joint tracking
+error below 1.9 degrees; motors saturate briefly. Both elbows and the wrist-cock
+joint were also tested with the 3 N m, 8 Hz disturbance. These are regression
+checks, not experimental validation or a completed answer to every lab task.
+
+The model has an anchored lower body, bending elbows, rigid legs, simplified hands and
+actuators, specified masses and uncalibrated contact. It is not a validated human
+golf swing. Write your own
+interpretation with those limitations in mind.
+
+11. OFFICIAL TECHNICAL REFERENCES
+--------------------------------
+Equations and constraints:
+https://mujoco.readthedocs.io/en/stable/computation.html
+Model XML:
+https://mujoco.readthedocs.io/en/stable/XMLreference.html
+API functions:
+https://mujoco.readthedocs.io/en/stable/APIreference/APIfunctions.html
