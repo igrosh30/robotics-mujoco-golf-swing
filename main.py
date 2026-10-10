@@ -7,27 +7,87 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 import numpy as np
+from scipy.optimize import brentq
 
 
 from swing_trajectory import (SwingTrajectory, JOINTS, SETTLE_TIME, BACKSWING_TIME,
                               DOWNSWING_TIME, FOLLOW_TIME, IMPACT_TIME, FINISH_TIME)
 
 FPS = 60
-#gains for each joint actuator 
-KP = np.array([650.,300.,220.,220.,180.,100.,100.,300.,220.,220.,180.])
-KD = np.array([70.,40.,28.,28.,20.,12.,12.,40.,28.,28.,20.])
+# tempo de acomodação pretendido no modelo simplificado de cada joint, em segundos
+# escolhemos 0,30 s por ser inferior aos 0,75 s do downswing, não é uma medição do jogador, embora tenhamos feito testes com 5s 10s,também correram bem
+# mas com 15s ou mais o jogador não consegue adptar-se a tempo, então bate com o taco no chão e os braços ficam out of control 
+PD_SETTLING_TIME = 0.30
+
+
+def calculate_pd_gains(model, trajectory, settling_time=PD_SETTLING_TIME):
+    """Calcula Kp e Kd na ordem de JOINTS para uma resposta nominal criticamente amortecida"""
+    if not np.isfinite(settling_time) or settling_time <= 0:
+        raise ValueError('settling_time must be finite and positive')
+
+    # começamos por estimar a resistência de cada joint a acelerar
+    # na rotação temos torque = J * aceleração angular, o equivalente a F = m*a
+    # J depende da distribuição da massa em relação ao eixo, não apenas da massa do segmento
+    qids = np.array([model.joint(name).qposadr[0] for name in JOINTS])
+    vids = np.array([model.joint(name).dofadr[0] for name in JOINTS])
+    reference_data = mujoco.MjData(model)
+    mass = np.empty((model.nv, model.nv))
+    joint_inertia = np.zeros(len(JOINTS))
+    for t in np.linspace(0., FINISH_TIME, 201):
+        # usamos um estado auxiliar para este cálculo não mexer no jogador da simulação
+        reference_data.qpos[qids] = trajectory.sample(t)[0]
+        mujoco.mj_forward(model, reference_data)
+        mujoco.mj_fullM(model, reference_data, mass)
+        # Mii é a inércia desta coordenada com as outras joints imobilizadas, em kg m²
+        # inclui os corpos a jusante e a armature, por isso o taco pesa no cálculo do braço direito
+        # usamos o maior valor entre 201 amostras da referência para obter ganhos fixos
+        # é uma aproximação diagonal, não a inércia efetiva exata com a pega fechada
+        joint_inertia = np.maximum(joint_inertia, mass.diagonal()[vids])
+
+    # definimos e = q_ref-q e e_dot = v_ref-v
+    # P funciona como uma mola virtual que puxa para a referência
+    # D corrige a diferença de velocidade, ajudando a evitar oscilações
+    # com compensação ideal e antecipação da aceleração, uma joint isolada dá
+    # J*e_ddot + Kd*e_dot + Kp*e = 0
+    # dividimos por J e comparamos com e_ddot + 2*zeta*wn*e_dot + wn²*e = 0
+    # daí saem Kp = J*wn² e Kd = 2*zeta*J*wn
+    # wn define a rapidez da resposta e zeta o amortecimento relativo
+    # escolhemos zeta=1 para amortecimento crítico, sem oscilar no degrau nominal
+
+    # queremos que o erro do degrau desça até 2% do valor inicial no tempo Ts
+    # para zeta=1 e derivada inicial do erro nula, e(t)/e(0) = (1+wn*t)*exp(-wn*t)
+    # resolvemos (1+x)*exp(-x)=0,02 com x=wn*Ts e obtemos x perto de 5,834
+    # com Ts=0,30 s dá wn perto de 19,446 rad/s, atenção que não são Hz
+    # a aproximação habitual Ts=4/(zeta*wn) não é exata para esta resposta crítica
+    scaled_time = brentq(lambda x: (1.+x)*np.exp(-x)-.02, 0., 20.)
+    natural_frequency = scaled_time / settling_time
+    kp = joint_inertia * natural_frequency**2       # N m/rad
+    kd = 2. * joint_inertia * natural_frequency     # N m s/rad, zeta fica fixo em 1
+
+    # não descontamos o amortecimento passivo em Kd porque step() compensa qfrc_passive
+    # as fórmulas dimensionam uma aproximação contínua de joints isoladas
+    # o acoplamento, a pega, os contactos, a saturação e o passo temporal exigem ensaios
+    # escolher Ts=0,30 s não garante esse tempo de acomodação no jogador completo
+    # referência: https://modernrobotics.northwestern.edu/nu-gm-book-resource/11-4-motion-control-with-torque-or-force-inputs-part-1-of-3/
+    return kp, kd
 
 
 class SwingSimulation:
     def __init__(self, *, timestep=None, disturbance_joint=None, disturbance_amplitude=3., disturbance_frequency=8.):
-        self.model = mujoco.MjModel.from_xml_path(str(Path(__file__).with_name('starting.xml')))
+        self.model = mujoco.MjModel.from_xml_path(str(Path(__file__).with_name('human.xml')))
         if timestep is not None:
             self.model.opt.timestep = timestep
         self.data = mujoco.MjData(self.model)
-        self.trajectory = SwingTrajectory(self.model) #cals swing_trajectory -> returns the initial pose
+        self.trajectory = SwingTrajectory(self.model) # prepara a referência de ângulos, velocidades e acelerações
+        # temos 11 coordenadas de rotação no jogador e 6 DOF livres na bola
+        # qpos tem 18 valores e qvel tem 17 porque a bola usa um quaternion para a orientação
+        # qposadr e dofadr evitam confundir os índices de posição e de velocidade
         self.qpos_ids = np.array([self.model.joint(n).qposadr[0] for n in JOINTS])
         self.qvel_ids = np.array([self.model.joint(n).dofadr[0] for n in JOINTS])
         self.motor_ids = np.array([self.model.actuator(f'{n}_motor').id for n in JOINTS])
+        # calculamos uma vez para este modelo e referência, os ganhos ficam fixos durante o swing
+        # estes ganhos substituem os antigos valores manuais, não são a justificação desses valores
+        self.kp, self.kd = calculate_pd_gains(self.model, self.trajectory)
         self.club_id = self.model.geom('club_head_collision').id
         self.ball_id = self.model.geom('golf_ball_geom').id
         self.ball_dof = self.model.joint('golf_ball_free').dofadr[0]
@@ -37,13 +97,14 @@ class SwingSimulation:
         self.disturbance_joint = disturbance_joint
         self.disturbance_amplitude = disturbance_amplitude
         self.disturbance_frequency = disturbance_frequency
-        self.pd_disabled = False #PD enabling
+        self.pd_disabled = False # a tecla P alterna entre comando completo e comando reduzido
         self.reset()
         
 
     def reset(self):
         mujoco.mj_resetData(self.model, self.data)
-        # The XML anchors the lower body with the soles at ground level.
+        # só impomos os ângulos diretamente no reset para colocar o jogador na pose inicial
+        # durante o swing o movimento resulta dos torques e da dinâmica
         self.data.qpos[self.qpos_ids] = self.trajectory.sample(0.)[0]
         mujoco.mj_forward(self.model, self.data)
         self.ball_start = self.data.body('golf_ball').xpos.copy()
@@ -61,35 +122,57 @@ class SwingSimulation:
         self.trace = []
 
     def step(self):
-        # Refresh kinematics and bias BEFORE computing control. The original
-        # XML uses Euler, which supports the split mj_step1/mj_step2 interface.
+        # atualizamos a cinemática e os termos dinâmicos antes de calcular o controlo
+        # esta divisão em step1 e step2 usa o integrador Euler escolhido por omissão
         mujoco.mj_step1(self.model, self.data)
         t = self.data.time
+        # ângulo em rad, velocidade em rad/s e aceleração em rad/s²
         target, target_speed, target_acceleration = self.trajectory.sample(t)
         mujoco.mj_fullM(self.model, self.data, self.inertia)
-        # Implicit PD: elbow DOFs introduce low-inertia directions in which
-        # explicit high-gain damping can oscillate even while holding a pose.
+        # o cálculo dos ganhos usa inércias diagonais, o controlo usa o bloco atuado 11x11
+        # os termos fora da diagonal representam o acoplamento entre as joints
         mass = self.inertia[np.ix_(self.qvel_ids, self.qvel_ids)]
         dt = self.model.opt.timestep
-        acceleration = np.linalg.solve(mass + np.diag(dt*KD + dt*dt*KP),
-            KP*(target-self.data.qpos[self.qpos_ids])
-            + (KD+dt*KP)*(target_speed-self.data.qvel[self.qvel_ids])
+        # P corrige o erro de ângulo e D o erro de velocidade, não temos termo integral
+        # mass @ target_acceleration antecipa a aceleração pedida pela trajetória
+        # os termos com dt tratam o feedback implicitamente e ajudam na estabilidade numérica
+        # quando dt tende para zero aproximamo-nos de M*a_cmd = Kp*e + Kd*e_dot + M*a_ref
+        acceleration = np.linalg.solve(mass + np.diag(dt*self.kd + dt*dt*self.kp),
+            self.kp*(target-self.data.qpos[self.qpos_ids])
+            + (self.kd+dt*self.kp)*(target_speed-self.data.qvel[self.qvel_ids])
             + mass@target_acceleration)
+        # bias compensa a gravidade e os efeitos de Coriolis e centrífugos
+        # subtraímos as forças passivas porque o MuJoCo também as aplica na dinâmica
+        # por isso aumentar damping não simula automaticamente atrito desconhecido pelo controlo
+        # as forças da pega e dos contactos continuam a ser resolvidas pelo simulador
         torque = (mass@acceleration + self.data.qfrc_bias[self.qvel_ids]
                   - self.data.qfrc_passive[self.qvel_ids])
         limits = self.model.actuator_ctrlrange[self.motor_ids]
 
         pd_constant = 0
+        # o botão P reduz o comando total para 25%, incluindo a compensação da gravidade
+        # não desliga apenas P e D, por isso não é um ensaio puro de PD ligado ou desligado
         if self.pd_disabled:
             pd_constant = 0.25
         else:
             pd_constant = 1
         
+        # enviamos um valor real para cada motor através de data.ctrl
+        # como gear=1, ctrl=10 corresponde a 10 N m nessa joint, não a graus ou PWM
+        # o passo de 0,0005 s dá 2000 atualizações por segundo simulado, FPS só afeta a janela
+        # o clip limita os torques a ±250 no tronco, ±180 nos ombros e ±90 nos cotovelos e pulso
+        # se o motor saturar, aumentar Kp não lhe dá mais torque disponível
         self.data.ctrl[self.motor_ids] = np.clip(torque, limits[:, 0], limits[:, 1]) * pd_constant
+        # contamos passos em que pelo menos um pedido excede o limite, antes da redução pela tecla P
         self.saturated_steps += int(np.any((torque < limits[:, 0]) | (torque > limits[:, 1])))
         self.steps += 1
 
-        # External torques (N m), never angle overrides or scripted impulses.
+        # este ensaio aplica um torque externo só na joint escolhida
+        # a amplitude A está em N m e a frequência f em Hz, por omissão A=3 e f=8
+        # sin(pi*u)² liga e desliga suavemente a oscilação entre 0,50 e 3,10 s
+        # A limita a amplitude, o máximo amostrado pode ser ligeiramente inferior
+        # sem disturbance_joint a perturbação fica desligada mesmo que A seja diferente de zero
+        # isto testa rejeição de perturbações, não altera o atrito nem permite aos pés escorregar
         self.data.qfrc_applied[:] = 0.
         if self.disturbance_joint is not None and SETTLE_TIME <= t <= FINISH_TIME:
             u = (t - SETTLE_TIME) / (FINISH_TIME - SETTLE_TIME)
@@ -98,7 +181,8 @@ class SwingSimulation:
             dof = self.model.joint(self.disturbance_joint).dofadr[0]
             self.data.qfrc_applied[dof] = disturbance
 
-        # Contacts from step1 belong to time t, before step2 integrates.
+        # verificamos o contacto no instante t antes de integrar o passo seguinte
+        # IMPACT_TIME é o instante planeado, o contacto real depende da dinâmica
         contact = any({c.geom1, c.geom2} == {self.club_id, self.ball_id}
                       for c in self.data.contact)
         if contact and self.impact_time is None:
@@ -119,12 +203,14 @@ class SwingSimulation:
             self.max_ball_speed = speed
             if self.impact_time is not None:
                 self.launch_velocity = velocity
+        # distância entre as duas pegas, mede o erro da restrição e não deslizamento da mão
         grip_error = float(np.linalg.norm(self.data.site('shared_grip').xpos
                                          - self.data.site('left_grip').xpos))
         self.max_grip_error = max(self.max_grip_error, grip_error)
         target, _, _ = self.trajectory.sample(self.data.time)
         error = self.data.qpos[self.qpos_ids] - target
         if self.data.time >= SETTLE_TIME:
+            # maior erro absoluto entre todas as joints depois da preparação, não é erro médio
             self.max_tracking_error = max(self.max_tracking_error, float(np.max(np.abs(error))))
         self.trace.append(np.r_[self.data.time, self.data.qpos[self.qpos_ids], target,
                                 self.data.ctrl[self.motor_ids],
@@ -137,6 +223,9 @@ class SwingSimulation:
         return self.metrics()
 
     def metrics(self):
+        # comparar erro, saturação, pega e resultado do impacto entre os ensaios
+        # zero warnings por si só não prova robustez
+        # ball_displacement_m é o deslocamento horizontal até ao instante final, não até a bola parar
         ball = self.data.body('golf_ball').xpos
         trace = np.asarray(self.trace)
         return {
@@ -185,7 +274,7 @@ def main():
     reset_flag = [False]
     pd_disabled = [False]
 
-    #click R - reset 
+    # R reinicia o movimento e P alterna a redução do comando dos motores
     def on_key(key_code):
         if key_code == 82:
             reset_flag[0] = True

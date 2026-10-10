@@ -1,5 +1,30 @@
 # robotics-mujoco-golf-swing
-2-link planar model of a golf swing in MuJoCo — forward/inverse kinematics + dynamics. IST MEEC Robotics, 2026.
+O ponto de entrada da simulação atual é `main.py`
+
+| Ficheiro | Função |
+|---|---|
+| `main.py` | Simulação do jogador, controlo PD, perturbações e viewer |
+| `swing_trajectory.py` | Referência do swing e cinemática inversa dos braços |
+| `export_visuals.py` | Exportação dos GIFs e folhas de imagens |
+| `planar_kinematics.py` | Cálculos do exemplo anterior de um braço planar de 2 elos |
+| `planar_arm_demo.py` | Demonstração desse exemplo planar no MuJoCo |
+| `human.xml` | Modelo físico do jogador, taco, bola, joints e motores |
+
+Com as dependências instaladas, executar na pasta do projeto
+
+```bash
+python main.py
+python main.py --headless
+python export_visuals.py
+```
+
+Os comandos de instalação estão em `RUN_LAB.txt` e a explicação do modelo em
+`UNDERSTAND_THE_PROJECT.txt`
+
+O exemplo planar depende de `models/arm2.xml`, que não está atualmente na pasta
+O módulo `planar_kinematics.py` pode ser executado sozinho, sem esse XML
+
+O texto abaixo descreve a etapa planar anterior e conserva as instruções históricas
 
 # robotics-mujoco-golf-swing
 
@@ -26,7 +51,7 @@ place the club head on a target path, and drive it in MuJoCo.
 - **Inverse kinematics**: given where we want the club head (x, y), what angles?
 
 MuJoCo does forward kinematics and dynamics for us. The **inverse kinematics is
-ours to compute** (in `kinematics.py`) and feed to the simulator.
+ours to compute** (in `planar_kinematics.py`) and feed to the simulator.
 
 ---
 
@@ -34,23 +59,24 @@ ours to compute** (in `kinematics.py`) and feed to the simulator.
 
 ```
 .
-├── kinematics.py        pure math: forward + inverse kinematics, trajectories.
+├── planar_kinematics.py        pure math: forward + inverse kinematics, trajectories.
 │                        NO MuJoCo import — testable on its own with numpy.
-├── run_arm.py           glue: loads the model, solves IK, writes the joint
+├── planar_arm_demo.py           glue: loads the model, solves IK, writes the joint
 │                        angles, and checks the tip lands on the target.
 ├── models/
 │   ├── arm2.xml         the 2-link arm (Stage 1: gravity OFF, kinematics only)
 │   ├── pendulum.xml     warm-up single pendulum
 │   ├── car.xml          MuJoCo reference example (study material)
 │   ├── starting.xml     scratch / experimentation
-│   └── golf_club.stl    club mesh (for later, realistic rendering)
+│   ├── golf_club.stl    club mesh
+│   └── golf_club_head.stl collision mesh do taco
 ├── requirements.txt     exact package versions — the environment recipe
 ├── .gitignore           keeps .venv/ and junk out of git
 └── README.md            this file
 ```
 
-**Design choice — why two Python files, not one:** `kinematics.py` is pure
-geometry and imports only numpy. `run_arm.py` is the only file that touches
+**Design choice — why two Python files, not one:** `planar_kinematics.py` is pure
+geometry and imports only numpy. `planar_arm_demo.py` is the only file that touches
 MuJoCo and the XML. So the math can be tested, plotted and debugged with no
 simulator, and the simulator can be swapped without touching the math.
 
@@ -82,18 +108,18 @@ Your prompt should now show `(.venv)`.
 ```bash
 # 1. The math alone — solves IK for several targets, checks the round trip.
 #    If IK is correct, every "roundtrip error" is ~1e-16.
-python kinematics.py
+python planar_kinematics.py
 
 # 2. Math + MuJoCo — solves IK, writes the angles, asks MuJoCo where the tip
 #    landed, compares to the target. Worst error should be ~1e-16.
-python run_arm.py
+python planar_arm_demo.py
 
 # 3. The viewer — animates the arm along an arc.
 #    macOS needs mjpython (ships with the mujoco package), NOT python:
-mjpython run_arm.py --view
+mjpython planar_arm_demo.py --view
 ```
 
-`run_arm.py --branch -1` switches to the mirrored elbow configuration.
+`planar_arm_demo.py --branch -1` switches to the mirrored elbow configuration.
 
 **Plane note:** the hand derivation is in the x–y plane; MuJoCo is z-up, so the
 arm lives in the **x–z** plane. The mapping is `derivation y → MuJoCo z`. An IK

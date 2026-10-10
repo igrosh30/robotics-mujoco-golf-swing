@@ -7,7 +7,7 @@ import mujoco
 import numpy as np
 from PIL import Image, ImageDraw
 
-from starting import (SwingSimulation, SETTLE_TIME, BACKSWING_TIME,
+from main import (SwingSimulation, SETTLE_TIME, BACKSWING_TIME,
                       IMPACT_TIME, FINISH_TIME, positive_float)
 
 ROOT = Path(__file__).resolve().parent

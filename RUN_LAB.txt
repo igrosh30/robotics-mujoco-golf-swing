@@ -6,10 +6,10 @@ The club accelerates through the ball and the ball launches through contact. Gra
 torques and club/ball contact remain simulated; standing balance is not.
 
 Watch the simulation:
-  .\.venv\Scripts\python.exe starting.py --slow-motion 3 --repeat
+  .\.venv\Scripts\python.exe main.py --slow-motion 3 --repeat
 
 Create or update the front and side visuals:
-  .\.venv\Scripts\python.exe export_motion.py
+  .\.venv\Scripts\python.exe export_visuals.py
 
 Only four files are created in exports:
   front.gif - animated front view
@@ -21,23 +21,24 @@ Each PNG is a ten-stage sheet, arranged in two rows like the lab-guide image, yo
 Re-running updates the same four files. No graphs, CSVs, JSON or PDF are generated.
 
 The explanation of the model and equations is in UNDERSTAND_THE_PROJECT.txt.
-starting.py controls the simulation; starting.xml defines the physical model.
+The file starts with notes covering the professor's questions,
+including DOF, constraints, quantified actuation and the limits of the current tests.
+main.py controls the simulation; human.xml defines the physical model.
 swing_trajectory.py contains timing, hand poses and club direction. Its poses
 columns are torso degrees, hand X/Y/Z metres in upper_torso, and club phase degrees.
 The reference solver coordinates the shoulders, elbows and wrist automatically.
 
-Check elbow poses, grip closure, impact, timestep agreement and disturbances:
-  .\.venv\Scripts\python.exe tests\validate_swing.py
+Compare the baseline with a 3 N m, 8 Hz external wrist torque:
+  python main.py --headless
+  python main.py --headless --disturb-joint right_wrist_cock --disturb-amplitude 3
 
-Both golf_club.stl and golf_club_head.stl are required. The latter is the small
-head collider; rebuild it with .\.venv\Scripts\python.exe tools\build_club_collision.py
-if the supplied mesh/transform changes. original contains the earlier source
-backups and retained reference assets. .venv is the Python environment.
+The previous tests/validate_swing.py is not present in this checkout.
+This disturbance does not change friction or test foot slip.
 
-A CSV is a spreadsheet of numerical measurements such as angles and torques.
-It is useful for calculations, but unnecessary for these pictures and GIFs.
-If you later want the basic simulator data, explicitly request it with:
-  .\.venv\Scripts\python.exe starting.py --headless --csv motion.csv
+Both models/golf_club.stl and models/golf_club_head.stl are required. The latter
+is the small head collider and needs reviewing if the supplied mesh/transform changes.
+The previous tools/build_club_collision.py is not present in this checkout.
+.venv is the Python environment when created using the setup commands below.
 
 On a new computer:
   python -m venv .venv

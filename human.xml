@@ -1,7 +1,9 @@
-<mujoco model="IEO Humanoid body">
+<mujoco model="Simplified Human">
 
-  <!-- 1 ms resolves the strike; verified against a 0.5 ms simulation. -->
-  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <!-- passo de 0,5 ms para resolver o impacto, com gravidade em m/s² no sentido -Z
+       o controlo atualiza em cada passo, são 2000 atualizações por segundo simulado -->
+  <option timestep="0.0005" gravity="0 0 -9.81"/>
+  <compiler meshdir="models"/>
 
   <asset>
     <texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="0 0 0" width="512" height="512"/>
@@ -12,6 +14,7 @@
     <material name="ball" rgba="0.95 0.95 0.95 1"/>
     <material name="grass" rgba="0.15 0.55 0.12 1" reflectance="0.05"/>
     <mesh name="golf_club_mesh" file="golf_club.stl" scale="0.0103 0.0103 0.0103"/>
+    <mesh name="golf_club_head_mesh" file="golf_club_head.stl" inertia="convex"/>
     <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
     <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance=".2"/>
   </asset>
@@ -19,12 +22,14 @@
   <default>
     <motor ctrlrange="-1 1" ctrllimited="true"/>
     <default class="body">
-      <!-- Explicit geom masses: each leg 11 kg (thigh + shin), each foot 1 kg,
-           torso including waist/pelvis 30 kg, each arm 3 kg, head 5 kg.
-           Player total = 65 kg, excluding club and ball. Within each group,
-           segment masses preserve the previous geometric proportions. -->
+      <!-- massas em kg: cada perna 11, cada pé 1, tronco com cintura 30
+           cada braço 3 e cabeça 5, no total são 65 kg sem o taco e a bola
+           são valores assumidos para o modelo, não medições de uma pessoa -->
       <geom type="capsule" condim="1" friction=".7" solimp=".9 .99 .003" solref=".015 1" material="body"/>
-      <joint type="hinge" damping="15" stiffness="80" armature=".01" limited="true" solimplimit="0 .99 .01"/>
+      <!-- damping é amortecimento viscoso em N m s/rad, não é atrito com o chão
+           stiffness=0 desliga a mola e armature acrescenta inércia à joint
+           os range estão em graus no XML, depois de carregar o modelo usamos radianos -->
+      <joint type="hinge" damping="2" stiffness="0" armature=".01" limited="true" solimplimit="0 .99 .01"/>
       <default class="big_joint">
         <joint damping="20" stiffness="100"/>
         <default class="big_stiff_joint">
@@ -43,19 +48,25 @@
 
   <worldbody>
 
-    <!-- Câmara fixa em +X, voltada para a frente do jogador. -->
+    <!-- câmara fixa em +X, voltada para a frente do jogador -->
     <camera name="front_fixed" pos="3.3 0 1.1" xyaxes="0 1 0 0 0 1" fovy="50"/>
 
-    <!-- CHÃO -->
-    <geom name="floor" type="plane" size="5 5 0.1" material="grass" contype="1" conaffinity="1"/>
+    <!-- chão e bola usam friction="1 .005 .0001" e condim=3 por omissão
+         com igual prioridade, o contacto automático usa o maior coeficiente de cada geom
+         baixar só o atrito do chão pode não mudar o contacto se a bola continuar com valor 1
+         condim=3 inclui normal e atrito tangencial, sem resistência ao rolamento -->
+    <geom name="floor" type="plane" size="5 5 0.1" rgba="0.75 0.9 0.75 1" contype="1" conaffinity="1"/>
 
-    <!-- Bola centrada à frente do jogador, apoiada no chão. -->
+    <!-- bola com 6 DOF livres, 3 translações e 3 rotações, sem atuação
+         freejoint usa 7 coordenadas de posição por causa do quaternion da orientação -->
     <body name="golf_ball" pos="0.85 0.042 0.022">
       <freejoint name="golf_ball_free"/>
       <geom name="golf_ball_geom" type="sphere" size="0.0213" mass="0.046" material="ball"/>
     </body>
 
-    <!-- Fixed lower body: an arm-motion demonstration, not a balance model. -->
+    <!-- a base não tem joint livre e as pernas não têm joints, ficam presas ao mundo
+         por isso os pés não escorregam e o jogador não cai, mesmo com atrito muito baixo,
+         fizemos este modelo para ver o swing da parte superior, não o equilíbrio de um jogador livre -->
     <body name="torso" pos="0 0 1.255" childclass="body">
       <camera name="back" pos="-3 0 1" xyaxes="0 -1 0 1 0 2" mode="trackcom"/>
       <camera name="side" pos="0 -3 1" xyaxes="1 0 0 0 1 2" mode="trackcom" fovy="55"/>
@@ -80,7 +91,7 @@
             </body>
           </body>
 
-          <!-- PERNA ESQUERDA FIXA -->
+          <!-- PERNA ESQUERDA FIXA-->
           <body name="left_thigh" pos="0 .08 -.04">
             <geom name="left_thigh" fromto="0 0 0 0 .04 -.35" size=".06" mass="6.948605"/>
             <body name="left_shin" pos="0 .04 -.388">
@@ -91,12 +102,13 @@
               </body>
             </body>
           </body>
+          
         </body>
       </body>
 
-      <!-- O swing roda em torno de um eixo vertical, antes da inclinação do tronco. -->
+      <!-- 1 DOF de rotação vertical no tronco, a inclinação do corpo seguinte é fixa -->
       <body name="swing_axis" pos="-.01 0 -.29">
-        <joint name="torso_turn" type="hinge" axis="0 0 1" range="-90 90" damping="20"/>
+        <joint name="torso_turn" type="hinge" axis="0 0 1" range="-90 90" damping="5"/>
       <body name="upper_torso" quat=".994522 0 .15 0">
         <geom name="spine" fromto="0 0 0 .01 0 .26" size=".055" rgba="0 0 0 0" mass="5.311711"/>
         <geom name="torso" fromto=".01 -.07 .26 .01 .07 .26" size=".07" mass="6.019394"/>
@@ -109,20 +121,22 @@
         </body>
 
       <!-- BRAÇO DIREITO -->
-      <!-- Matching elevation at both shoulders keeps the reference grips together. -->
+      <!-- 3 DOF no ombro direito e 1 no cotovelo abaixo
+           os eixos são locais e acompanham as rotações anteriores, não são sempre eixos do mundo -->
       <body name="right_upper_arm" pos=".01 -.17 .32">
-        <joint name="right_arm_lift" axis="0 1 0" range="-130 30" damping="20"/>
-        <joint name="right_shoulder1" axis="2 1 1" range="-100 100"/>
-        <joint name="right_shoulder2" axis="0 -1 1" range="-100 100"/>
+        <joint name="right_arm_lift" axis="0 1 0" range="-170 90"/>
+        <joint name="right_shoulder1" axis="1 0 0" range="-170 170"/>
+        <joint name="right_shoulder2" axis="0 0 1" range="-170 170"/>
         <geom name="right_upper_arm" fromto="0 0 0 .18 .05 -.15" size=".04" mass="1.746276"/>
         <body name="right_lower_arm" pos=".18 .05 -.15">
-          <!-- Cotovelo fixo; sem DOF. -->
+          <joint name="right_elbow" axis=".016 -.0198 .0126" range="-32.6 110" stiffness="0" damping="2"/>
+          <!-- q=0 já corresponde a cerca de 32,61 graus de flexão geométrica do cotovelo -->
           <geom name="right_lower_arm" fromto="0 0 0 .18 .12 -.04" size=".031" mass="0.935767"/>
           <body name="right_hand" pos=".18 .12 -.04" quat="0.97 -0.01 0.25881905 0">
-            <!-- A mão mantém a pega; apenas o pulso tem DOF. -->
-            <joint name="right_wrist_x" axis="1 0 0" range="-45 45" stiffness="0" damping="2"/>
-            <!-- Effective club cocking for the simplified fixed-elbow grip. -->
-            <joint name="right_wrist_y" axis="0 1 0" range="-120 45" stiffness="0" damping="2"/>
+            <!-- 2 DOF no pulso direito, o taco fica rigidamente ligado à mão -->
+            <joint name="right_wrist_cock" axis="0 0 1" range="-150 150" stiffness="0" damping="2"/>
+            <!-- segunda rotação do pulso para controlar o desvio do taco -->
+            <joint name="right_wrist_deviation" axis="0 1 0" range="-120 100" stiffness="0" damping="2"/>
             <geom name="right_hand" type="sphere" size=".04" mass="0.317957"/>
             <site name="shared_grip" size=".008" rgba="0 0 0 0"/>
             <site name="club_head" pos=".989 .010 -.286" size=".008" rgba="1 0 0 .7"/>
@@ -135,21 +149,29 @@
               material="club"
               pos="0.9751 0 -0.327"
               quat="0.88295 0 -0.46947 0"
-              contype="1"
-              conaffinity="1"
+              contype="0"
+              conaffinity="0"
             />
+            <!-- cabeça e haste têm formas de colisão separadas para evitar o volume convexo do taco inteiro
+                 a massa fica na malha visual, estes dois geoms de colisão não acrescentam massa -->
+            <geom name="club_head_collision" type="mesh" mesh="golf_club_head_mesh"
+                  mass="0" rgba="0 0 0 0"/>
+            <geom name="club_shaft_collision" type="capsule" fromto="-.04 0 .014 .975 0 -.315"
+                  size=".006" mass="0" rgba="0 0 0 0"/>
           </body>
         </body>
       </body>
 
       <!-- BRAÇO ESQUERDO -->
+      <!-- 3 DOF no ombro e 1 no cotovelo, não há uma joint de pulso esquerdo -->
       <body name="left_upper_arm" pos=".01 .17 .32">
-        <joint name="left_arm_lift" axis="0 1 0" range="-130 30" damping="20"/>
-        <joint name="left_shoulder1" axis="2 -1 1" range="-100 100"/>
-        <joint name="left_shoulder2" axis="0 1 1" range="-100 100"/>
+        <joint name="left_arm_lift" axis="0 1 0" range="-170 90"/>
+        <joint name="left_shoulder1" axis="1 0 0" range="-170 170"/>
+        <joint name="left_shoulder2" axis="0 0 1" range="-170 170"/>
         <geom name="left_upper_arm" fromto="0 0 0 .18 -.05 -.15" size=".04" mass="1.953298"/>
         <body name="left_lower_arm" pos=".18 -.05 -.15">
-          <!-- Cotovelo fixo; sem DOF. -->
+          <joint name="left_elbow" axis="-.016 -.0198 -.0126" range="-32.6 110" stiffness="0" damping="2"/>
+          <!-- tal como à direita, o ângulo da joint não é a flexão anatómica total -->
           <geom name="left_lower_arm" fromto="0 0 0 .18 -.12 -.04" size=".031" mass="1.046702"/>
           <site name="left_grip" pos=".18 -.12 -.04" size=".008" rgba="0 0 0 0"/>
         </body>
@@ -159,13 +181,16 @@
     </body>
   </worldbody>
 
-  <!-- The simplified forearms meet at one shared grip. Their overlapping
-       end capsules and the held club must not repel one another there.
-       The adjoining waist shapes are excluded below too. Club/ball and
-       club/floor contacts remain enabled. -->
+  <!-- excluímos colisões entre partes que se sobrepõem intencionalmente na pega e na cintura
+       os contactos do taco com a bola e com o chão continuam ativos -->
   <contact>
-    <!-- Adjacent waist shapes overlap at their intended pivot. With a fixed
-         base these need explicit exclusions to let the torso turn. -->
+    <!-- par explícito para o contacto cabeça do taco / bola
+         para ensaiar atrito aqui é preciso alterar este pair, não apenas os geoms
+         os dois primeiros valores 0,3 são os coeficientes nas duas direções tangenciais
+         solref e solimp ajustam a resposta numérica, não são uma restituição medida -->
+    <pair geom1="club_head_collision" geom2="golf_ball_geom" condim="3"
+          friction=".3 .3 .005 .0001 .0001" solref=".003 .35" solimp=".95 .99 .001"/>
+    <!-- estas formas sobrepõem-se na cintura e não devem bloquear a rotação do tronco -->
     <exclude body1="lower_waist" body2="upper_torso"/>
     <exclude body1="pelvis" body2="upper_torso"/>
     <exclude body1="right_lower_arm" body2="left_lower_arm"/>
@@ -173,17 +198,27 @@
   </contact>
 
   <equality>
+    <!-- connect mantém as pegas na mesma posição, são 3 restrições escalares
+         não impõe a mesma orientação das mãos nem permite escorregamento físico na pega
+         no caso ideal com posto 3, a mobilidade do jogador passa de 11 para 8
+         o solver admite pequenos erros de fecho que medimos em max_grip_error_mm -->
     <connect site1="left_grip" site2="shared_grip" solref=".002 1" solimp=".99 .999 .001"/>
   </equality>
 
   <actuator>
+    <!-- 11 motores, um por joint do jogador, não há motores nas pernas ou na bola
+         gear=1 por omissão domujoco, data.ctrl corresponde ao torque em N m
+         limites assumidos: tronco ±250, ombros ±180, cotovelos e pulso ±90
+         não modelamos tensão elétrica, PWM ou atrasos de comunicação -->
+    <motor name="right_elbow_motor" joint="right_elbow" ctrlrange="-90 90"/>
+    <motor name="left_elbow_motor" joint="left_elbow" ctrlrange="-90 90"/>
     <motor name="right_arm_lift_motor" joint="right_arm_lift" ctrlrange="-180 180"/>
     <motor name="left_arm_lift_motor" joint="left_arm_lift" ctrlrange="-180 180"/>
     <motor name="torso_turn_motor" joint="torso_turn" ctrlrange="-250 250"/>
     <motor name="right_shoulder1_motor" joint="right_shoulder1" ctrlrange="-180 180"/>
     <motor name="right_shoulder2_motor" joint="right_shoulder2" ctrlrange="-180 180"/>
-    <motor name="right_wrist_x_motor" joint="right_wrist_x" ctrlrange="-90 90"/>
-    <motor name="right_wrist_y_motor" joint="right_wrist_y" ctrlrange="-90 90"/>
+    <motor name="right_wrist_cock_motor" joint="right_wrist_cock" ctrlrange="-90 90"/>
+    <motor name="right_wrist_deviation_motor" joint="right_wrist_deviation" ctrlrange="-90 90"/>
     <motor name="left_shoulder1_motor" joint="left_shoulder1" ctrlrange="-180 180"/>
     <motor name="left_shoulder2_motor" joint="left_shoulder2" ctrlrange="-180 180"/>
   </actuator>

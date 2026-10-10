@@ -1,4 +1,4 @@
-UNDERSTANDING AND IMPROVING YOUR GOLF-SWING PROJECT
+UNDERSTANDING O NOSSO GOLF-SWING PROJECT
 =================================================
 
 This is a learning and code guide, not a lab report. Figure 1 and the task
@@ -6,7 +6,7 @@ instructions in the lab PDF were read for this revision; the PDF was not edited.
 The poses are inspired by its sequence, not extracted motion-capture data.
 
 1. THE BIG PICTURE
------------------
+
 This project simulates a golfer, a club and a freely moving ball in MuJoCo.
 Python chooses desired joint angles over time. A controller converts tracking
 errors into motor torques. MuJoCo uses mass, inertia, gravity, constraints and
@@ -20,7 +20,7 @@ The ball moves through simulated contact, not a prescribed animation or kick.
 A GIF visualizes the result. Changing playback speed does not change physics.
 
 2. WHAT EVERY FILE DOES
-----------------------
+
 starting.xml: physical scene, bodies, geometry, joints, motors, gravity,
 contact, grip constraint and cameras.
 starting.py: implicit PD controller, simulator, impact metrics and viewer.
@@ -42,7 +42,7 @@ __pycache__/: Python's automatically recreated cache, if present.
 The PDF remains untouched. The exports folder contains only the four visuals.
 
 3. COORDINATES, JOINTS AND THE BODY TREE
--------------------------------------
+
 Use metres, kilograms, seconds, radians, newtons and newton-metres. World Z is
 up; gravity is (0,0,-9.81) m/s^2. The player's front is approximately +X at
 address, and +Y is initially their left. The initial ball centre is
@@ -66,7 +66,7 @@ Each body's position and orientation are relative to its parent:
           left_upper_arm [arm lift + two shoulder hinges]
             left_lower_arm [elbow hinge, left grip marker]
 
-The lower body is now anchored to the world, as requested for studying arm
+The lower body is now anchored to the world, for studying arm
 motion without falling. There is no free root or standing-balance simulation.
 The arms, turning torso, club and ball still use simulated dynamics. The fixed
 support can supply reaction forces and torques, unlike a freely standing player.
@@ -105,8 +105,8 @@ Quaternions use (w,x,y,z), are normalized by MuJoCo, and are not four angles.
 Do not differentiate their components as if they were angular velocities.
 qpos and qvel have different indexing; qposadr and dofadr locate each joint.
 
-4. KINEMATICS: DESCRIBING MOTION
-------------------------------
+4. KINEMATICS
+
 Kinematics describes where things are and how they move, without asking why.
 For a hinge, q is angle, v=dq/dt is angular velocity, a=dv/dt is acceleration.
 
@@ -258,8 +258,17 @@ gravity and velocity-dependent forces. The implicit damping treatment improves
 numerical stability but does not invert the full grip/contact-constrained dynamics.
 Some tracking error and brief torque saturation are still expected.
 
-Kp=[650,300,220,220,180,100,100,300,220,220,180] N m/rad.
-Kd=[70,40,28,28,20,12,12,40,28,28,20] N m s/rad.
+The gains are now calculated by calculate_pd_gains in starting.py and stored
+in sim.kp and sim.kd, in JOINTS order. The function samples 201 reference poses
+and uses the largest sampled M_ii for each joint as a diagonal inertia estimate J.
+Matching J*e_ddot + Kd*e_dot + Kp*e = 0 to a second-order response gives
+Kp=J*wn^2 and Kd=2*zeta*J*wn, in N m/rad and N m s/rad respectively.
+The design assumes zeta=1 and a 2% step settling time of 0.30 s, giving
+wn=5.8339217/0.30=19.4464057 rad/s. Edit PD_SETTLING_TIME to change this target.
+These are newly calculated gains, not a derivation of the previous manual values.
+The settling time is a design choice for the isolated continuous approximation;
+coupling, grip constraints, contacts and discrete integration require simulation
+checks and do not guarantee critical damping of the complete player.
 
 Current motors have unit gear, so controls correspond to hinge torques in N m.
 Changing transmission/gear requires revisiting that assumption. Use qfrc_actuator
@@ -377,13 +386,14 @@ checks, not experimental validation or a completed answer to every lab task.
 
 The model has an anchored lower body, bending elbows, rigid legs, simplified hands and
 actuators, specified masses and uncalibrated contact. It is not a validated human
-golf swing. Write your own
-interpretation with those limitations in mind.
+golf swing. Write your own interpretation with those limitations in mind.
 
-11. OFFICIAL TECHNICAL REFERENCES
+11. REFERENCES
 --------------------------------
 Equations and constraints:
 https://mujoco.readthedocs.io/en/stable/computation.html
+https://modernrobotics.northwestern.edu/nu-gm-book-resource/11-4-motion-control-with-torque-or-force-inputs-part-1-of-3/
+
 Model XML:
 https://mujoco.readthedocs.io/en/stable/XMLreference.html
 API functions:
