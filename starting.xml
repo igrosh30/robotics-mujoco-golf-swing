@@ -1,7 +1,7 @@
 <mujoco model="IEO Humanoid body">
 
   <!-- Resolve head/ball contact with 0.5 ms steps; see validation script. -->
-  <option timestep="0.0005" gravity="0 0 -9.81"/>
+  <option timestep="0.0005" gravity="0 0 -50.81"/>
 
   <asset>
     <texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="0 0 0" width="512" height="512"/>
@@ -81,7 +81,7 @@
             </body>
           </body>
 
-          <!-- PERNA ESQUERDA FIXA -->
+          <!-- PERNA ESQUERDA FIXA-->
           <body name="left_thigh" pos="0 .08 -.04">
             <geom name="left_thigh" fromto="0 0 0 0 .04 -.35" size=".06" mass="6.948605"/>
             <body name="left_shin" pos="0 .04 -.388">
@@ -92,6 +92,7 @@
               </body>
             </body>
           </body>
+          
         </body>
       </body>
 

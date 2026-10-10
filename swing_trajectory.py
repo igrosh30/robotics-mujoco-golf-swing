@@ -5,12 +5,12 @@ from scipy.interpolate import BPoly, CubicSpline
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
-SETTLE_TIME = .50
-BACKSWING_TIME = 1.00
+SETTLE_TIME = .5
+BACKSWING_TIME = 1
 DOWNSWING_TIME = .75
 FOLLOW_TIME = .85
 IMPACT_TIME = SETTLE_TIME + BACKSWING_TIME + DOWNSWING_TIME
-FINISH_TIME = IMPACT_TIME + FOLLOW_TIME
+FINISH_TIME = IMPACT_TIME + FOLLOW_TIME # note simulation runs for 3.5s! can't be higher 
 JOINTS = (
     'torso_turn', 'right_arm_lift', 'right_shoulder1', 'right_shoulder2',
     'right_elbow', 'right_wrist_cock', 'right_wrist_deviation',

@@ -13,6 +13,7 @@ from swing_trajectory import (SwingTrajectory, JOINTS, SETTLE_TIME, BACKSWING_TI
                               DOWNSWING_TIME, FOLLOW_TIME, IMPACT_TIME, FINISH_TIME)
 
 FPS = 60
+#gains for each joint actuator 
 KP = np.array([650.,300.,220.,220.,180.,100.,100.,300.,220.,220.,180.])
 KD = np.array([70.,40.,28.,28.,20.,12.,12.,40.,28.,28.,20.])
 
@@ -23,7 +24,7 @@ class SwingSimulation:
         if timestep is not None:
             self.model.opt.timestep = timestep
         self.data = mujoco.MjData(self.model)
-        self.trajectory = SwingTrajectory(self.model)
+        self.trajectory = SwingTrajectory(self.model) #cals swing_trajectory -> returns the initial pose
         self.qpos_ids = np.array([self.model.joint(n).qposadr[0] for n in JOINTS])
         self.qvel_ids = np.array([self.model.joint(n).dofadr[0] for n in JOINTS])
         self.motor_ids = np.array([self.model.actuator(f'{n}_motor').id for n in JOINTS])
@@ -36,7 +37,9 @@ class SwingSimulation:
         self.disturbance_joint = disturbance_joint
         self.disturbance_amplitude = disturbance_amplitude
         self.disturbance_frequency = disturbance_frequency
+        self.pd_disabled = False #PD enabling
         self.reset()
+        
 
     def reset(self):
         mujoco.mj_resetData(self.model, self.data)
@@ -75,7 +78,14 @@ class SwingSimulation:
         torque = (mass@acceleration + self.data.qfrc_bias[self.qvel_ids]
                   - self.data.qfrc_passive[self.qvel_ids])
         limits = self.model.actuator_ctrlrange[self.motor_ids]
-        self.data.ctrl[self.motor_ids] = np.clip(torque, limits[:, 0], limits[:, 1])
+
+        pd_constant = 0
+        if self.pd_disabled:
+            pd_constant = 0.25
+        else:
+            pd_constant = 1
+        
+        self.data.ctrl[self.motor_ids] = np.clip(torque, limits[:, 0], limits[:, 1]) * pd_constant
         self.saturated_steps += int(np.any((torque < limits[:, 0]) | (torque > limits[:, 1])))
         self.steps += 1
 
@@ -170,8 +180,19 @@ def positive_float(value):
         raise argparse.ArgumentTypeError('must be a finite positive number')
     return number
 
-
 def main():
+    start = 0
+    reset_flag = [False]
+    pd_disabled = [False]
+
+    #click R - reset 
+    def on_key(key_code):
+        if key_code == 82:
+            reset_flag[0] = True
+            #print("reset!")
+        if key_code == 80:
+            pd_disabled[0] = True
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true', help='run without opening a window')
     parser.add_argument('--duration', type=positive_float, default=3.5, help='simulation seconds')
@@ -187,23 +208,32 @@ def main():
     if args.headless:
         sim.run(args.duration)
     else:
-        with mujoco.viewer.launch_passive(sim.model, sim.data) as viewer:
+        with mujoco.viewer.launch_passive(sim.model, sim.data, key_callback=on_key) as viewer:
             with viewer.lock():
                 viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
                 viewer.cam.fixedcamid = sim.model.camera('front_fixed').id
             start = time.monotonic()
             while viewer.is_running():
+                if reset_flag[0]:
+                    with viewer.lock():
+                        sim.reset()
+                    start = time.monotonic()
+                    reset_flag[0] = False
+                if pd_disabled[0]:
+                    sim.pd_disabled = not sim.pd_disabled
+                    pd_disabled[0] = False
+                
                 frame_start = time.monotonic()
-                target_time = min(args.duration, (frame_start-start)/args.slow_motion)
+                target_time = min(args.duration, (frame_start - start) / args.slow_motion)
                 with viewer.lock():
                     while sim.data.time + 1e-10 < target_time:
                         sim.step()
                 viewer.sync()
-                if args.repeat and frame_start-start > (args.duration+.8)*args.slow_motion:
+                if args.repeat and frame_start - start > (args.duration + .8) * args.slow_motion:
                     with viewer.lock():
                         sim.reset()
                     start = time.monotonic()
-                time.sleep(max(0., 1./FPS-(time.monotonic()-frame_start)))
+                time.sleep(max(0., 1. / FPS - (time.monotonic() - frame_start)))
     if args.csv:
         sim.save_trace(args.csv)
     sim.report()
