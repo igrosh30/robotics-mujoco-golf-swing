@@ -354,6 +354,17 @@ only. --duration sets simulated seconds. --output selects another destination.
 The simulation runs first; a separate data object replays its poses for rendering.
 Fixed/player cameras may lose the travelling ball after it leaves the view.
 
+For a PD settling-time sweep, use `analysis.py`. It changes the controller
+configuration in memory, so `main.py` does not need to be edited between cases:
+
+  .\.venv\Scripts\python.exe analysis.py --all
+
+This creates one `front.gif` and one `metrics.json` in each named subfolder of
+`exports/analysis`, plus `summary.json`. The default settling times are 0.15,
+0.30, 0.50, 0.75 and 1.00 seconds. Edit the tuple in `all_cases()` in
+`analysis.py` to choose different values. `--duration` changes simulated
+duration and `--output` changes the result folder.
+
 10. WHAT CSV IS FOR, AND HOW TO IMPROVE THE MODEL
 ----------------------------------------------
 CSV is a plain-text spreadsheet of numbers, with a row for each timestep and

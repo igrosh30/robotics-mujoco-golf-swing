@@ -1,6 +1,4 @@
-﻿"""Export only front/side GIFs and front/side picture sheets."""
-
-import argparse
+﻿import argparse
 from pathlib import Path
 
 import mujoco

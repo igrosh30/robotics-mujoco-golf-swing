@@ -73,7 +73,9 @@ def calculate_pd_gains(model, trajectory, settling_time=PD_SETTLING_TIME):
 
 
 class SwingSimulation:
-    def __init__(self, *, timestep=None, disturbance_joint=None, disturbance_amplitude=3., disturbance_frequency=8.):
+    def __init__(self, *, timestep=None, disturbance_joint=None,
+                 disturbance_amplitude=3., disturbance_frequency=8.,
+                 settling_time=PD_SETTLING_TIME):
         self.model = mujoco.MjModel.from_xml_path(str(Path(__file__).with_name('human.xml')))
         if timestep is not None:
             self.model.opt.timestep = timestep
@@ -87,7 +89,9 @@ class SwingSimulation:
         self.motor_ids = np.array([self.model.actuator(f'{n}_motor').id for n in JOINTS])
         # calculamos uma vez para este modelo e referência, os ganhos ficam fixos durante o swing
         # estes ganhos substituem os antigos valores manuais, não são a justificação desses valores
-        self.kp, self.kd = calculate_pd_gains(self.model, self.trajectory)
+        self.kp, self.kd = calculate_pd_gains(
+            self.model, self.trajectory, settling_time=settling_time
+        )
         self.club_id = self.model.geom('club_head_collision').id
         self.ball_id = self.model.geom('golf_ball_geom').id
         self.ball_dof = self.model.joint('golf_ball_free').dofadr[0]
