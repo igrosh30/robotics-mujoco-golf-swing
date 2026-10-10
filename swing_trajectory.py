@@ -5,8 +5,8 @@ from scipy.interpolate import BPoly, CubicSpline
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
-SETTLE_TIME = .5
-BACKSWING_TIME = 1
+SETTLE_TIME = .50
+BACKSWING_TIME = 1.00
 DOWNSWING_TIME = .75
 FOLLOW_TIME = .85
 IMPACT_TIME = SETTLE_TIME + BACKSWING_TIME + DOWNSWING_TIME
