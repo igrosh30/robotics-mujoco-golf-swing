@@ -153,11 +153,11 @@ class SwingSimulation:
                   - self.data.qfrc_passive[self.qvel_ids])
         limits = self.model.actuator_ctrlrange[self.motor_ids]
 
-        pd_constant = 0
-        # o botão P reduz o comando total para 25%, incluindo a compensação da gravidade
+        pd_constant = 1
+        # o botão P reduz o comando total para 10%, incluindo a compensação da gravidade
         # não desliga apenas P e D, por isso não é um ensaio puro de PD ligado ou desligado
         if self.pd_disabled:
-            pd_constant = 0.25
+            pd_constant = 0.1
         else:
             pd_constant = 1
         
