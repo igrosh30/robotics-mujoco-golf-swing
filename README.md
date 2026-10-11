@@ -1,160 +1,93 @@
 # robotics-mujoco-golf-swing
-O ponto de entrada da simulação atual é `main.py`
+
+Simulação de um swing de golfe em **MuJoCo + Python** — jogador (parte superior
+do corpo), taco e bola. IST MEEC, Robótica Lab 1 (Prof. João Silva Sequeira).
+
+O jogador tem 11 graus de liberdade atuados (tronco, ombros, cotovelos, pulso
+direito). O movimento é definido por uma trajetória de referência calculada por
+cinemática inversa e seguida por um controlador PD com compensação dinâmica —
+os motores aplicam **torques**, nunca ângulos diretos, por isso a física é real.
+
+## Ficheiros
 
 | Ficheiro | Função |
 |---|---|
-| `main.py` | Simulação do jogador, controlo PD, perturbações e viewer |
+| `human.xml` | Modelo físico: jogador, taco, bola, joints e motores |
 | `swing_trajectory.py` | Referência do swing e cinemática inversa dos braços |
+| `main.py` | Simulação, controlo PD, perturbações e viewer |
+| `disturbance_sweep.py` | Varrimento de perturbações em cada DOF (Task 2) |
+| `analysis.py` | Varrimento do tempo de estabelecimento do PD |
 | `export_visuals.py` | Exportação dos GIFs e folhas de imagens |
-| `planar_kinematics.py` | Cálculos do exemplo anterior de um braço planar de 2 elos |
-| `planar_arm_demo.py` | Demonstração desse exemplo planar no MuJoCo |
-| `human.xml` | Modelo físico do jogador, taco, bola, joints e motores |
+| `models/golf_club.stl` | Malha visual do taco |
+| `models/golf_club_head.stl` | Malha de colisão da cabeça do taco |
+| `requirements.txt` | Versões exatas dos pacotes |
 
-Com as dependências instaladas, executar na pasta do projeto
+## Instalação (uma vez)
 
-```bash
-python main.py
-python main.py --headless
-python export_visuals.py
-```
-
-Os comandos de instalação estão em `RUN_LAB.txt` e a explicação do modelo em
-`UNDERSTAND_THE_PROJECT.txt`
-
-O exemplo planar depende de `models/arm2.xml`, que não está atualmente na pasta
-O módulo `planar_kinematics.py` pode ser executado sozinho, sem esse XML
-
-O texto abaixo descreve a etapa planar anterior e conserva as instruções históricas
-
-# robotics-mujoco-golf-swing
-
-A 2-link planar model of a golf swing in **MuJoCo**, for the IST MEEC Robotics
-course (Lab 1, Prof. João Silva Sequeira). The player + club are modelled as a
-two-joint arm; we derive its kinematics by hand, solve inverse kinematics to
-place the club head on a target path, and drive it in MuJoCo.
-
----
-
-## The idea in one picture
-
-```
-        shoulder ● θ1          two revolute joints (θ1, θ2) in one vertical plane
-                 |             player's arm  = link 1  (length L1)
-                 | L1          club          = link 2  (length L2)
-          elbow  ● θ2          club head     = the tip that hits the ball
-                 |
-                 | L2
-                 ● club head  →  ● ball
-```
-
-- **Forward kinematics**: given the angles (θ1, θ2), where is the club head?
-- **Inverse kinematics**: given where we want the club head (x, y), what angles?
-
-MuJoCo does forward kinematics and dynamics for us. The **inverse kinematics is
-ours to compute** (in `planar_kinematics.py`) and feed to the simulator.
-
----
-
-## What's in the repo
-
-```
-.
-├── planar_kinematics.py        pure math: forward + inverse kinematics, trajectories.
-│                        NO MuJoCo import — testable on its own with numpy.
-├── planar_arm_demo.py           glue: loads the model, solves IK, writes the joint
-│                        angles, and checks the tip lands on the target.
-├── models/
-│   ├── arm2.xml         the 2-link arm (Stage 1: gravity OFF, kinematics only)
-│   ├── pendulum.xml     warm-up single pendulum
-│   ├── car.xml          MuJoCo reference example (study material)
-│   ├── starting.xml     scratch / experimentation
-│   ├── golf_club.stl    club mesh
-│   └── golf_club_head.stl collision mesh do taco
-├── requirements.txt     exact package versions — the environment recipe
-├── .gitignore           keeps .venv/ and junk out of git
-└── README.md            this file
-```
-
-**Design choice — why two Python files, not one:** `planar_kinematics.py` is pure
-geometry and imports only numpy. `planar_arm_demo.py` is the only file that touches
-MuJoCo and the XML. So the math can be tested, plotted and debugged with no
-simulator, and the simulator can be swapped without touching the math.
-
----
-
-## Setup (do this once after cloning)
-
-You need **Python 3.10+**. Everyone builds their own virtual environment from
-`requirements.txt` — we do NOT share the installed environment (`.venv/` is
-gitignored because it's large and machine-specific).
+Requer **Python 3.10+**. Cada pessoa cria o seu ambiente a partir de
+`requirements.txt` (`.venv/` está no `.gitignore`).
 
 ```bash
 git clone https://github.com/igrosh30/robotics-mujoco-golf-swing.git
 cd robotics-mujoco-golf-swing
 
-python -m venv .venv                 # create the environment
-source .venv/bin/activate            # macOS / Linux
-# .venv\Scripts\activate             # Windows
+python -m venv .venv
+source .venv/bin/activate        # macOS / Linux
+# .venv\Scripts\activate         # Windows
 
-pip install -r requirements.txt      # install the exact same versions
+pip install -r requirements.txt
 ```
 
-Your prompt should now show `(.venv)`.
+## Como correr
 
----
-
-## Running it
+No macOS o viewer precisa de `mjpython` (vem com o pacote mujoco), não `python`.
 
 ```bash
-# 1. The math alone — solves IK for several targets, checks the round trip.
-#    If IK is correct, every "roundtrip error" is ~1e-16.
-python planar_kinematics.py
+# Ver o swing na janela interativa
+mjpython main.py
+#   R  -> reinicia a simulação
+#   P  -> reduz os torques a 10% (mostra que o movimento vem da dinâmica)
 
-# 2. Math + MuJoCo — solves IK, writes the angles, asks MuJoCo where the tip
-#    landed, compares to the target. Worst error should be ~1e-16.
-python planar_arm_demo.py
+# Correr sem janela e imprimir as métricas (impacto, velocidade, erro, etc.)
+python main.py --headless
 
-# 3. The viewer — animates the arm along an arc.
-#    macOS needs mjpython (ships with the mujoco package), NOT python:
-mjpython planar_arm_demo.py --view
+# Teste de perturbações (Task 2): baseline + cada DOF perturbado.
+# Guarda disturbance_results_<A>Nm.json e imprime a tabela comparativa.
+python disturbance_sweep.py --amplitude 30
+python disturbance_sweep.py --amplitude 60
+python disturbance_sweep.py --amplitude 300
+
+# Varrimento do tempo de estabelecimento do PD (gera GIFs + summary.json)
+python analysis.py --all
+
+# Exportar GIFs e folhas de imagens (front/side) para exports/
+python export_visuals.py
 ```
 
-`planar_arm_demo.py --branch -1` switches to the mirrored elbow configuration.
+## Testes realizados (Task 2)
 
-**Plane note:** the hand derivation is in the x–y plane; MuJoCo is z-up, so the
-arm lives in the **x–z** plane. The mapping is `derivation y → MuJoCo z`. An IK
-target `(x, y)` becomes the world point `(x, 0, y)`.
+- **Swing nominal** — baseline sem perturbação: impacto ≈ 2,25 s, velocidade da
+  cabeça do taco ≈ 9,44 m/s, erro máximo de seguimento 1,03°, 0% de saturação.
+- **Perturbação por DOF** — torque externo sinusoidal adicionado a
+  `qfrc_applied` (não a `ctrl`), com janela `sin²` suave, aplicado a cada uma das
+  11 joints a 30, 60 e 300 N·m. Resultados em `disturbance_results_*.json`.
+- **Detuning do PD** — tempo de estabelecimento de 0,3 a 20 s (`analysis.py`).
+- **Verificação de torque reduzido** — tecla `P` a 10%: o corpo não consegue
+  seguir a referência, confirmando que o movimento vem da dinâmica.
 
----
-
-## Working on it together
+## Trabalho em equipa
 
 ```bash
-git pull            # get the latest before you start
-# ... make your changes ...
-git add -A
-git commit -m "short description of what you did"
-git push            # share it
+git pull
+# ... alterações ...
+git add -A && git commit -m "descrição curta"
+git push
 ```
 
-If `git push` is rejected with "behind", someone else pushed first —
-run `git pull` to merge their work in, then push again.
+Nunca fazer commit de `.venv/`. Se adicionares um pacote,
+`pip freeze > requirements.txt` e faz commit.
 
-**Never commit `.venv/`** — it's gitignored for a reason (huge, and the binaries
-only work on the machine that built them). If you add a new package, run
-`pip freeze > requirements.txt` and commit that so everyone stays in sync.
+## Documentação
 
----
-
-## Where the project is going
-
-- **Stage 1 (done):** kinematics — arm places its tip on any target, gravity off.
-- **Stage 2 (next):** dynamics — gravity on, apply torques/forces to drive a real
-  swing, add the ball and the impact.
-- **Stage 3:** validation + report — check the physics, plot results, write it up.
-
-## The three work streams
-
-- **Modelling** — the arm/club model and its parameters (XML, masses, lengths).
-- **Simulation** — the Python that drives MuJoCo and runs the disturbance tests.
-- **Validation + report** — physics sanity checks, plots, and the writeup.
+`RUN_LAB.txt` — comandos de instalação · `UNDERSTAND_THE_PROJECT.txt` —
+explicação do modelo e das equações · relatório em `<nome do PDF>`.
